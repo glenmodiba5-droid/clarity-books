@@ -2,32 +2,36 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import google.generativeai as genai
-import groq
-from groq import Groq
+from groq import Groq  # Make sure this is imported!
 
-# Initialize Groq client
-groq_client = Groq(api_key=st.secrets["general"]["groq_api_key"])
-
+# --- THE "ASK AI" FUNCTION ---
 def ask_ai(prompt):
-    """The Dual-Brain Fallback System"""
-    # 1. Try Gemini First
+    """The Dual-Brain Fallback System that works on Cloud and Local"""
     try:
-        genai.configure(api_key=st.secrets["general"]["gemini_api_key"])
+        # 1. Pull keys directly from Streamlit's 'brain' (secrets)
+        gemini_key = st.secrets["general"]["gemini_api_key"]
+        groq_key = st.secrets["general"]["groq_api_key"]
+        
+        # 2. Try Gemini first
+        genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text, "Gemini 1.5"
     
     except Exception as e:
-        # 2. If Gemini fails (Quota/429), Fallback to Groq
+        # 3. If Gemini fails or keys aren't ready, switch to Groq
         try:
-            chat_completion = groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile", # One of the best models on Groq
+            client = Groq(api_key=st.secrets["general"]["groq_api_key"])
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}]
             )
-            return chat_completion.choices[0].message.content, "Groq (Llama 3.3)"
-        
+            return completion.choices[0].message.content, "Groq (Llama 3.3)"
         except Exception as groq_e:
-            return f"Both AI engines are offline. Error: {groq_e}", "Offline"
+            return f"Dual-Brain failure. Check secrets! Error: {groq_e}", "Offline"
+
+# --- REST OF YOUR APP (Page Config, CSS, etc.) ---
+st.set_page_config(page_title="Clarity Books", layout="wide")
 
 # 1. PAGE CONFIG (Must be first)
 st.set_page_config(
