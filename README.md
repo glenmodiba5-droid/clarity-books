@@ -3,8 +3,7 @@
 **Clarity Books** is an AI-native wealth management engine designed for the South African property market. It transforms static rental data into dynamic debt-acceleration strategies while providing real-time, law-compliant legal assistance.
 
 ## 🚀 Live Demo
-[🔗 View Live App](https://glenmodiba5-droid-clarity-books-app.streamlit.app/) 
-*(Note: Replace the link above with your actual Streamlit URL)*
+(https://glenmodiba5-droid-clarity-books-app.streamlit.app/) 
 
 ## 🛠️ Tech Stack
 - **Frontend/UI:** Streamlit (Python)
