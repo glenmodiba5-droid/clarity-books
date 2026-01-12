@@ -177,18 +177,30 @@ else:
             st.subheader("Current Holdings")
             st.dataframe(df, use_container_width=True)
         with t3:
+           with t3:
             st.subheader("Log Monthly Outgoings")
             if not df.empty:
                 with st.form("e_form", clear_on_submit=True):
                     p = st.selectbox("Select Property", df['name'].tolist())
-                    pid = df[df['name'] == p]['id'].values[0]
+                    
+                    # FIX: Force the ID to a standard integer
+                    pid = int(df[df['name'] == p]['id'].values[0])
+                    
                     cat = st.selectbox("Category", ["Rates & Taxes", "Maintenance", "Levies", "Insurance", "Other"])
-                    amt = st.number_input("Amount (R)", min_value=0.0)
+                    
+                    # FIX: Force the amount to a standard float
+                    amt = float(st.number_input("Amount (R)", min_value=0.0))
+                    
                     if st.form_submit_button("Log Expense"):
                         c = get_connection(); cur = c.cursor()
-                        cur.execute("INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", (user_id, pid, cat, amt))
+                        # The parameters now use standard Python types
+                        cur.execute(
+                            "INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", 
+                            (int(user_id), pid, cat, amt)
+                        )
                         c.commit(); c.close(); st.rerun()
-            else: st.warning("Onboard an asset first.")
+            else: 
+                st.warning("Onboard an asset first.")
         with t4:
             st.subheader("👤 User Account")
             st.info(f"**Landlord ID:** {user_id} | **Username:** {st.session_state.get('username')}")
