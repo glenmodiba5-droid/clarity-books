@@ -1,25 +1,115 @@
 import streamlit as st
-import sqlite3
+import mysql.connector
 import pandas as pd
 import google.generativeai as genai
-from groq import Groq  # Make sure this is imported!
+import hashlib
+from groq import Groq
 
-# --- THE "ASK AI" FUNCTION ---
-def ask_ai(prompt):
-    """The Dual-Brain Fallback System that works on Cloud and Local"""
+# --- 1. DATABASE INITIALIZATION (Aiven MySQL) ---
+def init_aiven_mysql():
+    """Builds the Phase 1 infrastructure for public launch."""
     try:
-        # 1. Pull keys directly from Streamlit's 'brain' (secrets)
+        conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+        cursor = conn.cursor()
+        
+        # 1. Users Table [cite: 4]
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY, 
+                username VARCHAR(255) UNIQUE, 
+                password TEXT
+            );
+        ''')
+        
+        # 2. Properties Table [cite: 17, 19]
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS properties (
+                id INT AUTO_INCREMENT PRIMARY KEY, 
+                owner_id INT, 
+                name VARCHAR(255), 
+                address TEXT, 
+                monthly_rent DECIMAL(15, 2), 
+                bond_balance DECIMAL(15, 2)
+            );
+        ''')
+        
+        # 3. Expenses Table [cite: 7, 8]
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INT AUTO_INCREMENT PRIMARY KEY, 
+                owner_id INT, 
+                property_id INT, 
+                category VARCHAR(255), 
+                amount DECIMAL(15, 2), 
+                date DATE
+            );
+        ''')
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"MySQL Connection/Init Error: {e}")
+        return False
+
+# Trigger database setup on app start
+init_aiven_mysql()
+
+# --- 2. PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Clarity Books | Wealth Management",
+    page_icon="logo.png",
+    layout="wide"
+)
+
+# --- 3. UTILITIES & SECURITY ---
+def make_hashes(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def check_hashes(password, hashed_text):
+    return make_hashes(password) == hashed_text
+
+def register_user(new_username, new_password):
+    try:
+        conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+        cursor = conn.cursor()
+        hashed_pw = make_hashes(new_password)
+        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (new_username, hashed_pw))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except mysql.connector.Error as err:
+        st.error(f"Registration Failed: {err}")
+        return False
+
+# Initialize Session State
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+if 'auth_mode' not in st.session_state:
+    st.session_state['auth_mode'] = 'login'
+
+# --- 4. THEME-AWARE CSS ---
+st.markdown("""
+    <style>
+    .logo-text-blue { font-family: 'Helvetica Neue', sans-serif; font-weight: 800; font-size: 32px; color: #007bff; letter-spacing: -1px; }
+    .logo-text-gray { font-size: 32px; color: #64748b; font-family: 'Helvetica Neue', sans-serif; }
+    [data-testid="stMetric"] { background-color: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128,128,128,0.2); }
+    .stChatMessage p { font-size: 19px !important; line-height: 1.6; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 5. THE "ASK AI" FUNCTION ---
+def ask_ai(prompt):
+    try:
         gemini_key = st.secrets["general"]["gemini_api_key"]
         groq_key = st.secrets["general"]["groq_api_key"]
-        
-        # 2. Try Gemini first
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text, "Gemini 1.5"
-    
-    except Exception as e:
-        # 3. If Gemini fails or keys aren't ready, switch to Groq
+    except Exception:
         try:
             client = Groq(api_key=st.secrets["general"]["groq_api_key"])
             completion = client.chat.completions.create(
@@ -28,266 +118,122 @@ def ask_ai(prompt):
             )
             return completion.choices[0].message.content, "Groq (Llama 3.3)"
         except Exception as groq_e:
-            return f"Dual-Brain failure. Check secrets! Error: {groq_e}", "Offline"
+            return f"AI Offline: {groq_e}", "Offline"
 
-# --- REST OF YOUR APP (Page Config, CSS, etc.) ---
-st.set_page_config(page_title="Clarity Books", layout="wide")
-
-# 1. PAGE CONFIG (Must be first)
-st.set_page_config(
-    page_title="Clarity Books | Wealth Management",
-    page_icon="logo.png",
-    layout="wide"
-)
-
-# 2. THEME-AWARE CSS (Dark & Light Mode Support)
-# We use 'var(--secondary-background-color)' so the app flips colors automatically
-st.markdown("""
-    <style>
-    /* Main Container Styling */
-    .header-box {
-        background-color: var(--secondary-background-color);
-        padding: 25px;
-        border-radius: 15px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        margin-bottom: 25px;
-        border-left: 10px solid #007bff;
-    }
-    
-    /* Branding Colors - Forced to stay consistent */
-    .logo-text-blue {
-        font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 800;
-        font-size: 32px;
-        color: #007bff;
-        letter-spacing: -1px;
-    }
-    
-    .logo-text-gray {
-        font-size: 32px; 
-        color: #64748b; 
-        font-family: 'Helvetica Neue', sans-serif;
-    }
-
-    /* Metric Card Styling */
-    [data-testid="stMetric"] {
-        background-color: var(--secondary-background-color);
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border: 1px solid rgba(128,128,128,0.2);
-    }
-
-    /* Chat Text Size Fix */
-    .stChatMessage p {
-        font-size: 19px !important;
-        line-height: 1.6;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 3. SHARED HEADER (Logo + Title)
-col1, col2 = st.columns([2, 10]) 
-with col1:
-    st.image("logo.png", width=160)
-with col2:
-    st.markdown("""
-        <div style="margin-top: 10px;">
-            <span class="logo-text-blue">CLARITY</span>
-            <span class="logo-text-gray">BOOKS</span>
-            <p style="color: #64748b; margin: 0; font-size: 14px; margin-top: -5px;">
-                AI-Driven Property Portfolio Intelligence
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-st.markdown('<div style="margin-bottom: 20px;"></div>', unsafe_allow_html=True)
-
-# 3. DATABASE INITIALIZATION
-def init_db():
-    conn = sqlite3.connect('clarity_books.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS properties 
-                      (id INTEGER PRIMARY KEY, name TEXT, address TEXT, 
-                       monthly_rent REAL, bond_balance REAL)''')
-    conn.commit()
-    return conn
-
-# 4. SHARED HEADER (Logo + Title)
-import streamlit as st
-import sqlite3
-import pandas as pd
-import google.generativeai as genai
-
-# 1. PAGE CONFIGURATION
-st.set_page_config(
-    page_title="Clarity Books | Wealth Management",
-    page_icon="logo.png",
-    layout="wide"
-)
-
-# 2. THEME-AWARE CSS (Ensure Dark Mode works perfectly)
-st.markdown("""
-    <style>
-    .header-box {
-        background-color: var(--secondary-background-color);
-        padding: 25px;
-        border-radius: 15px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        margin-bottom: 25px;
-        border-left: 10px solid #007bff;
-    }
-    .logo-text-blue { font-family: 'Helvetica Neue', sans-serif; font-weight: 800; font-size: 32px; color: #007bff; letter-spacing: -1px; }
-    .logo-text-gray { font-size: 32px; color: #64748b; font-family: 'Helvetica Neue', sans-serif; }
-    [data-testid="stMetric"] { background-color: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128,128,128,0.2); }
-    .stChatMessage p { font-size: 19px !important; line-height: 1.6; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 3. DATABASE ENGINE
-def init_db():
-    conn = sqlite3.connect('clarity_books.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS properties 
-                      (id INTEGER PRIMARY KEY, name TEXT, address TEXT, 
-                       monthly_rent REAL, bond_balance REAL)''')
-    conn.commit()
-    return conn
-
-# 5. SIDEBAR NAVIGATION
-with st.sidebar:
-    st.image("logo.png", width=150)
-    st.divider()
-    menu = st.radio("Management", [
-        "📊 Executive Dashboard", 
-        "🏠 Manage Assets", 
-        "⚖️ AI Legal Assistant", 
-        "🧠 AI Wealth Advisor"
-    ])
-    st.divider()
-    st.caption("Developed by Glen Modiba")
-    st.caption("Project for SF Residency 2026")
-
-# LOAD GLOBAL DATA
-conn = init_db()
-df = pd.read_sql_query("SELECT * FROM properties", conn)
-conn.close()
-
-# --- PAGE 1: EXECUTIVE DASHBOARD ---
-if menu == "📊 Executive Dashboard":
-    st.title("Portfolio Insights")
-    if not df.empty:
-        total_rent = df['monthly_rent'].sum()
-        total_debt = df['bond_balance'].sum()
-        
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Assets", f"{len(df)} Units")
-        k2.metric("Monthly Revenue", f"R{total_rent:,.2f}")
-        k3.metric("Total Liabilities", f"R{total_debt:,.2f}", delta="-1.4%", delta_color="normal")
-        k4.metric("DTI Ratio", f"{(total_debt/(total_rent*12)*100):.1f}%")
-
-        st.divider()
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.subheader("Revenue Stream")
-            st.area_chart(df.set_index('name')['monthly_rent'])
-        with c2:
-            st.subheader("Debt Split")
-            st.bar_chart(df.set_index('name')['bond_balance'])
-    else:
-        st.info("Onboard an asset to view analytics.")
-
-# --- PAGE 2: MANAGE ASSETS ---
-elif menu == "🏠 Manage Assets":
-    st.title("Asset Inventory")
-    t1, t2 = st.tabs(["Onboard New Asset", "Current Portfolio"])
-    with t1:
-        with st.form("p_form", clear_on_submit=True):
-            col_a, col_b = st.columns(2)
-            name = col_a.text_input("Property Nickname")
-            addr = col_b.text_input("Physical Address")
-            rent = col_a.number_input("Monthly Rent (R)")
-            bond = col_b.number_input("Remaining Bond (R)")
-            if st.form_submit_button("Finalize Onboarding"):
-                conn = init_db(); cursor = conn.cursor()
-                cursor.execute("INSERT INTO properties (name, address, monthly_rent, bond_balance) VALUES (?,?,?,?)", (name, addr, rent, bond))
-                conn.commit(); conn.close()
-                st.success("Asset synced to cloud."); st.rerun()
-    with t2:
-        st.dataframe(df, use_container_width=True)
-
-# --- PAGE 3: AI LEGAL ASSISTANT (Finishing Touch) ---
-# --- PAGE 3: AI LEGAL ASSISTANT ---
-elif menu == "⚖️ AI Legal Assistant":
-    st.title("⚖️ Smart Lease Architect")
-    st.write("Drafting South African law-compliant clauses in seconds.")
-
-    # Check for secrets before proceeding
-    if "gemini_api_key" not in st.secrets["general"] or "groq_api_key" not in st.secrets["general"]:
-        st.warning("⚠️ API Keys are missing. Please check your secrets.toml file.")
-
-    col_l, col_r = st.columns([1, 1.2])
-    
-    with col_l:
-        st.subheader("Parameters")
-        clause_type = st.selectbox("Select Clause Type", ["Pet Policy", "Late Payment Penalties", "Maintenance", "Smoking Rules"])
-        tenant = st.text_input("Tenant Name (Optional)")
-        
-        # FIXED: Ensure the AI call is indented inside the button click
-        if st.button("Generate Legal Clause"):
-            with st.spinner("Consulting AI Legal Models..."):
-                legal_prompt = f"""
-                You are a South African Legal Expert. 
-                Draft a formal {clause_type} for a lease agreement involving tenant {tenant or 'the Tenant'}. 
-                Reference the South African Rental Housing Act.
-                """
-                # This uses the Dual-Brain function we created
-                answer, provider = ask_ai(legal_prompt) 
-                st.session_state.legal_draft = answer
-                st.session_state.last_provider = provider
-
-    with col_r:
-        st.subheader("Draft Preview")
-        if 'legal_draft' in st.session_state:
-            # Styled document box for a professional look
-            st.info(st.session_state.legal_draft)
-            st.caption(f"Generated via: {st.session_state.get('last_provider', 'Unknown')}")
-            st.button("📋 Copy to Lease Agreement")
+# --- 6. AUTHENTICATION PAGES ---
+def auth_page():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("logo.png", width=150)
+        if st.session_state['auth_mode'] == 'login':
+            st.title("🔑 Clarity Books Login")
+            user = st.text_input("Username")
+            pw = st.text_input("Password", type='password')
+            if st.button("Login", use_container_width=True):
+                conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, password FROM users WHERE username = %s", (user,))
+                result = cursor.fetchone()
+                conn.close()
+                if result and check_hashes(pw, result[1]):
+                    st.session_state['logged_in'] = True
+                    st.session_state['user_id'] = result[0]
+                    st.session_state['username'] = user
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials")
+            if st.button("New Landlord? Register Here"):
+                st.session_state['auth_mode'] = 'signup'
+                st.rerun()
         else:
-            st.caption("Your draft will appear here after clicking 'Generate'.")
+            st.title("📝 Register Account")
+            new_user = st.text_input("Choose Username")
+            new_pw = st.text_input("Choose Password", type='password')
+            if st.button("Sign Up", use_container_width=True):
+                if register_user(new_user, new_pw):
+                    st.success("Success! Please Login.")
+                    st.session_state['auth_mode'] = 'login'
+                    st.rerun()
+            if st.button("Back to Login"):
+                st.session_state['auth_mode'] = 'login'
+                st.rerun()
 
-# --- PAGE 4: AI WEALTH ADVISOR ---
-elif menu == "🧠 AI Wealth Advisor":
-    st.title("🤖 Strategy Engine")
-    st.caption("AI-Powered Debt Acceleration Planning")
+# --- 7. MAIN APP CONTROL ---
+if not st.session_state['logged_in']:
+    auth_page()
+else:
+    # DATA LOADING
+    conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+    user_id = st.session_state['user_id']
+    df = pd.read_sql_query("SELECT * FROM properties WHERE owner_id = %s", conn, params=(user_id,))
+    exp_df = pd.read_sql_query("SELECT * FROM expenses WHERE owner_id = %s", conn, params=(user_id,))
+    conn.close()
 
-    if not df.empty:
-        # Initialize Chat History
-        if "messages" not in st.session_state:
-            st.session_state.messages = [{"role": "assistant", "content": "Hello Glen! I've analyzed your portfolio. Ready to optimize your property wealth?"}]
+    # SIDEBAR
+    with st.sidebar:
+        st.image("logo.png", width=150)
+        st.divider()
+        menu = st.radio("Navigation", ["📊 Dashboard", "🏠 Manage Assets", "⚖️ Legal AI", "🧠 Wealth AI"])
+        if st.sidebar.button("🚪 Log Out"):
+            st.session_state['logged_in'] = False
+            st.rerun()
+        st.caption(f"Logged in: {st.session_state['username']}")
 
-        # Display Chat History
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+    # DASHBOARD
+    if menu == "📊 Dashboard":
+        st.title("Portfolio Insights")
+        if not df.empty:
+            rev = df['monthly_rent'].sum()
+            exp = exp_df['amount'].sum() if not exp_df.empty else 0
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Gross Revenue", f"R{rev:,.2f}")
+            k2.metric("Expenses", f"R{exp:,.2f}")
+            k3.metric("Net Profit", f"R{(rev-exp):,.2f}") [cite: 8]
+        else:
+            st.info("Onboard assets to view metrics.")
 
-        # Chat Input
-        if prompt := st.chat_input("Message Clarity AI..."):
-            # Add user message to history
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+    # ASSETS & PROFILE
+    elif menu == "🏠 Manage Assets":
+        st.title("Asset Inventory")
+        t1, t2, t3, t4 = st.tabs(["Onboard", "Portfolio", "Expenses", "👤 Profile"])
+        with t1:
+            with st.form("p_form"):
+                n = st.text_input("Nickname"); a = st.text_input("Address")
+                r = st.number_input("Rent (R)"); b = st.number_input("Bond (R)")
+                if st.form_submit_button("Finalize"):
+                    c = mysql.connector.connect(st.secrets["aiven"]["uri"]); cur = c.cursor()
+                    cur.execute("INSERT INTO properties (owner_id, name, address, monthly_rent, bond_balance) VALUES (%s,%s,%s,%s,%s)", (user_id, n, a, r, b))
+                    c.commit(); c.close(); st.rerun()
+        with t2: st.dataframe(df, use_container_width=True)
+        with t3:
+            if not df.empty:
+                with st.form("e_form"):
+                    p = st.selectbox("Property", df['name'].tolist())
+                    pid = df[df['name'] == p]['id'].values[0]
+                    cat = st.selectbox("Category", ["Maintenance", "Rates", "Levies", "Other"]) [cite: 7]
+                    amt = st.number_input("Amount (R)")
+                    if st.form_submit_button("Log Expense"):
+                        c = mysql.connector.connect(st.secrets["aiven"]["uri"]); cur = c.cursor()
+                        cur.execute("INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", (user_id, pid, cat, amt))
+                        c.commit(); c.close(); st.rerun()
+        with t4:
+            st.info(f"Landlord: {st.session_state['username']}")
+            st.write(f"Total Managed: {len(df)}") [cite: 5]
 
-            # Generate Assistant Response
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    wealth_prompt = f"Portfolio context: {df.to_string()}. User Question: {prompt}. Focus on South African bond math."
-                    answer, provider = ask_ai(wealth_prompt)
-                    
-                    st.markdown(answer)
-                    st.caption(f"Strategy Engine: {provider}")
-                    
-                    # Add assistant message to history
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-    else:
-        st.warning("Please onboard an asset first to enable the AI Strategy Engine.")
+    # AI TOOLS
+    elif menu == "⚖️ Legal AI":
+        st.title("⚖️ Smart Lease Architect") [cite: 11]
+        cl = st.selectbox("Clause", ["Pet Policy", "Late Payment", "Maintenance"])
+        if st.button("Draft Clause"):
+            with st.spinner("Drafting..."):
+                ans, prov = ask_ai(f"Draft a South African lease clause for {cl} based on the Rental Housing Act.")
+                st.info(ans); st.caption(f"Engine: {prov}")
+
+    elif menu == "🧠 Wealth AI":
+        st.title("🤖 Strategy Engine") [cite: 10]
+        if not df.empty:
+            if prompt := st.chat_input("Ask about your portfolio..."):
+                with st.chat_message("user"): st.markdown(prompt)
+                with st.chat_message("assistant"):
+                    ans, prov = ask_ai(f"Context: {df.to_string()}. Question: {prompt}")
+                    st.markdown(ans); st.caption(f"Engine: {prov}")
