@@ -5,11 +5,21 @@ import google.generativeai as genai
 import hashlib
 from groq import Groq
 
-# --- 1. DATABASE INITIALIZATION (Aiven MySQL) ---
+# --- 1. DATABASE UTILITIES ([mysql] SECRETS FORMAT) ---
+def get_connection():
+    """Centralized connection using your specific secrets format."""
+    return mysql.connector.connect(
+        host=st.secrets["mysql"]["host"],
+        port=st.secrets["mysql"]["port"],
+        user=st.secrets["mysql"]["user"],
+        password=st.secrets["mysql"]["password"],
+        database=st.secrets["mysql"]["database"]
+    )
+
 def init_aiven_mysql():
-    """Builds the Phase 1 infrastructure for public launch."""
+    """Builds the Phase 1 infrastructure in Aiven MySQL."""
     try:
-        conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+        conn = get_connection()
         cursor = conn.cursor()
         
         # 1. Users Table [cite: 4]
@@ -33,7 +43,7 @@ def init_aiven_mysql():
             );
         ''')
         
-        # 3. Expenses Table [cite: 7, 8]
+        # 3. Expenses Table [cite: 7]
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id INT AUTO_INCREMENT PRIMARY KEY, 
@@ -50,10 +60,10 @@ def init_aiven_mysql():
         conn.close()
         return True
     except Exception as e:
-        st.error(f"MySQL Connection/Init Error: {e}")
+        st.error(f"MySQL Init Error: {e}")
         return False
 
-# Trigger database setup on app start
+# Trigger database setup immediately
 init_aiven_mysql()
 
 # --- 2. PAGE CONFIGURATION ---
@@ -63,7 +73,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 3. UTILITIES & SECURITY ---
+# --- 3. SECURITY UTILITIES ---
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -72,7 +82,7 @@ def check_hashes(password, hashed_text):
 
 def register_user(new_username, new_password):
     try:
-        conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+        conn = get_connection()
         cursor = conn.cursor()
         hashed_pw = make_hashes(new_password)
         cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (new_username, hashed_pw))
@@ -80,7 +90,7 @@ def register_user(new_username, new_password):
         cursor.close()
         conn.close()
         return True
-    except mysql.connector.Error as err:
+    except Exception as err:
         st.error(f"Registration Failed: {err}")
         return False
 
@@ -100,12 +110,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 5. THE "ASK AI" FUNCTION ---
+# --- 5. AI ENGINE (DUAL-BRAIN) ---
 def ask_ai(prompt):
     try:
-        gemini_key = st.secrets["general"]["gemini_api_key"]
-        groq_key = st.secrets["general"]["groq_api_key"]
-        genai.configure(api_key=gemini_key)
+        genai.configure(api_key=st.secrets["general"]["gemini_api_key"])
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text, "Gemini 1.5"
@@ -117,8 +125,8 @@ def ask_ai(prompt):
                 messages=[{"role": "user", "content": prompt}]
             )
             return completion.choices[0].message.content, "Groq (Llama 3.3)"
-        except Exception as groq_e:
-            return f"AI Offline: {groq_e}", "Offline"
+        except Exception as e:
+            return f"AI Engine Offline: {e}", "Offline"
 
 # --- 6. AUTHENTICATION PAGES ---
 def auth_page():
@@ -130,7 +138,7 @@ def auth_page():
             user = st.text_input("Username")
             pw = st.text_input("Password", type='password')
             if st.button("Login", use_container_width=True):
-                conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+                conn = get_connection()
                 cursor = conn.cursor()
                 cursor.execute("SELECT id, password FROM users WHERE username = %s", (user,))
                 result = cursor.fetchone()
@@ -141,17 +149,17 @@ def auth_page():
                     st.session_state['username'] = user
                     st.rerun()
                 else:
-                    st.error("Invalid credentials")
+                    st.error("Invalid Username or Password")
             if st.button("New Landlord? Register Here"):
                 st.session_state['auth_mode'] = 'signup'
                 st.rerun()
         else:
-            st.title("📝 Register Account")
+            st.title("📝 Landlord Registration")
             new_user = st.text_input("Choose Username")
             new_pw = st.text_input("Choose Password", type='password')
-            if st.button("Sign Up", use_container_width=True):
+            if st.button("Create Account", use_container_width=True):
                 if register_user(new_user, new_pw):
-                    st.success("Success! Please Login.")
+                    st.success("Registration Successful! Please Login.")
                     st.session_state['auth_mode'] = 'login'
                     st.rerun()
             if st.button("Back to Login"):
@@ -162,8 +170,8 @@ def auth_page():
 if not st.session_state['logged_in']:
     auth_page()
 else:
-    # DATA LOADING
-    conn = mysql.connector.connect(st.secrets["aiven"]["uri"])
+    # --- LOAD LOGGED-IN USER DATA ---
+    conn = get_connection()
     user_id = st.session_state['user_id']
     df = pd.read_sql_query("SELECT * FROM properties WHERE owner_id = %s", conn, params=(user_id,))
     exp_df = pd.read_sql_query("SELECT * FROM expenses WHERE owner_id = %s", conn, params=(user_id,))
@@ -174,66 +182,74 @@ else:
         st.image("logo.png", width=150)
         st.divider()
         menu = st.radio("Navigation", ["📊 Dashboard", "🏠 Manage Assets", "⚖️ Legal AI", "🧠 Wealth AI"])
-        if st.sidebar.button("🚪 Log Out"):
+        if st.button("🚪 Log Out"):
             st.session_state['logged_in'] = False
             st.rerun()
-        st.caption(f"Logged in: {st.session_state['username']}")
+        st.caption(f"Logged in as: {st.session_state['username']}")
 
-    # DASHBOARD
+    # PAGE 1: DASHBOARD
     if menu == "📊 Dashboard":
         st.title("Portfolio Insights")
         if not df.empty:
             rev = df['monthly_rent'].sum()
             exp = exp_df['amount'].sum() if not exp_df.empty else 0
             k1, k2, k3 = st.columns(3)
-            k1.metric("Gross Revenue", f"R{rev:,.2f}")
-            k2.metric("Expenses", f"R{exp:,.2f}")
+            k1.metric("Gross Revenue", f"R{rev:,.2f}") [cite: 8, 9]
+            k2.metric("Total Expenses", f"R{exp:,.2f}") [cite: 7]
             k3.metric("Net Profit", f"R{(rev-exp):,.2f}") [cite: 8]
         else:
-            st.info("Onboard assets to view metrics.")
+            st.info("Welcome! Please onboard your first asset to see analytics.")
 
-    # ASSETS & PROFILE
+    # PAGE 2: MANAGE ASSETS [cite: 5, 13]
     elif menu == "🏠 Manage Assets":
         st.title("Asset Inventory")
         t1, t2, t3, t4 = st.tabs(["Onboard", "Portfolio", "Expenses", "👤 Profile"])
         with t1:
             with st.form("p_form"):
+                st.subheader("Add New Property")
                 n = st.text_input("Nickname"); a = st.text_input("Address")
-                r = st.number_input("Rent (R)"); b = st.number_input("Bond (R)")
-                if st.form_submit_button("Finalize"):
-                    c = mysql.connector.connect(st.secrets["aiven"]["uri"]); cur = c.cursor()
+                r = st.number_input("Monthly Rent (R)"); b = st.number_input("Remaining Bond (R)")
+                if st.form_submit_button("Save Asset"):
+                    c = get_connection(); cur = c.cursor()
                     cur.execute("INSERT INTO properties (owner_id, name, address, monthly_rent, bond_balance) VALUES (%s,%s,%s,%s,%s)", (user_id, n, a, r, b))
                     c.commit(); c.close(); st.rerun()
-        with t2: st.dataframe(df, use_container_width=True)
+        with t2:
+            st.subheader("Current Holdings")
+            st.dataframe(df, use_container_width=True)
         with t3:
+            st.subheader("Log Monthly Outgoings")
             if not df.empty:
                 with st.form("e_form"):
-                    p = st.selectbox("Property", df['name'].tolist())
+                    p = st.selectbox("Select Property", df['name'].tolist())
                     pid = df[df['name'] == p]['id'].values[0]
-                    cat = st.selectbox("Category", ["Maintenance", "Rates", "Levies", "Other"]) [cite: 7]
+                    cat = st.selectbox("Category", ["Rates & Taxes", "Maintenance", "Levies", "Insurance", "Other"])
                     amt = st.number_input("Amount (R)")
                     if st.form_submit_button("Log Expense"):
-                        c = mysql.connector.connect(st.secrets["aiven"]["uri"]); cur = c.cursor()
+                        c = get_connection(); cur = c.cursor()
                         cur.execute("INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", (user_id, pid, cat, amt))
                         c.commit(); c.close(); st.rerun()
+            else: st.warning("Onboard an asset first.")
         with t4:
-            st.info(f"Landlord: {st.session_state['username']}")
-            st.write(f"Total Managed: {len(df)}") [cite: 5]
+            st.subheader("👤 User Account") [cite: 5]
+            st.info(f"**Landlord ID:** {user_id} | **Username:** {st.session_state['username']}")
 
-    # AI TOOLS
+    # PAGE 3: LEGAL AI [cite: 11]
     elif menu == "⚖️ Legal AI":
-        st.title("⚖️ Smart Lease Architect") [cite: 11]
-        cl = st.selectbox("Clause", ["Pet Policy", "Late Payment", "Maintenance"])
-        if st.button("Draft Clause"):
-            with st.spinner("Drafting..."):
-                ans, prov = ask_ai(f"Draft a South African lease clause for {cl} based on the Rental Housing Act.")
+        st.title("⚖️ Smart Lease Architect")
+        st.write("Drafting South African law-compliant clauses.")
+        cl = st.selectbox("Select Clause Type", ["Pet Policy", "Late Payment Penalties", "Maintenance"])
+        if st.button("Generate Draft"):
+            with st.spinner("Consulting AI..."):
+                ans, prov = ask_ai(f"Draft a formal {cl} clause for a SA lease based on the Rental Housing Act.")
                 st.info(ans); st.caption(f"Engine: {prov}")
 
+    # PAGE 4: WEALTH AI [cite: 10]
     elif menu == "🧠 Wealth AI":
-        st.title("🤖 Strategy Engine") [cite: 10]
+        st.title("🤖 Strategy Engine")
         if not df.empty:
-            if prompt := st.chat_input("Ask about your portfolio..."):
-                with st.chat_message("user"): st.markdown(prompt)
+            if pmt := st.chat_input("Ask Clarity AI about your portfolio..."):
+                with st.chat_message("user"): st.markdown(pmt)
                 with st.chat_message("assistant"):
-                    ans, prov = ask_ai(f"Context: {df.to_string()}. Question: {prompt}")
-                    st.markdown(ans); st.caption(f"Engine: {prov}")
+                    ans, prov = ask_ai(f"Portfolio Data: {df.to_string()}. User Question: {pmt}. Focus on SA bond math.")
+                    st.markdown(ans); st.caption(f"Strategy Engine: {prov}")
+        else: st.warning("Onboard an asset to activate AI strategy.")
