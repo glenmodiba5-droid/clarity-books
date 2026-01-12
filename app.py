@@ -167,17 +167,25 @@ def auth_page():
                 st.rerun()
 
 # --- 7. MAIN APP CONTROL ---
+# --- 7. MAIN APP CONTROL ---
 if not st.session_state['logged_in']:
     auth_page()
 else:
-    # --- LOAD LOGGED-IN USER DATA ---
-    conn = get_connection()
-    user_id = st.session_state['user_id']
-    df = pd.read_sql_query("SELECT * FROM properties WHERE owner_id = %s", conn, params=(user_id,))
-    exp_df = pd.read_sql_query("SELECT * FROM expenses WHERE owner_id = %s", conn, params=(user_id,))
-    conn.close()
+    # 1. ALWAYS LOAD DATA FIRST
+    try:
+        conn = get_connection()
+        user_id = st.session_state.get('user_id')
+        
+        # Load properties and expenses for the specific owner [cite: 17, 7]
+        df = pd.read_sql_query("SELECT * FROM properties WHERE owner_id = %s", conn, params=(user_id,))
+        exp_df = pd.read_sql_query("SELECT * FROM expenses WHERE owner_id = %s", conn, params=(user_id,))
+        conn.close()
+    except Exception as e:
+        st.error(f"Data Loading Error: {e}")
+        df = pd.DataFrame() # Create empty dataframe so the app doesn't crash
+        exp_df = pd.DataFrame()
 
-    # SIDEBAR
+    # 2. NOW RUN THE NAVIGATION
     with st.sidebar:
         st.image("logo.png", width=150)
         st.divider()
@@ -185,7 +193,18 @@ else:
         if st.button("🚪 Log Out"):
             st.session_state['logged_in'] = False
             st.rerun()
-        st.caption(f"Logged in as: {st.session_state['username']}")
+
+    # SIDEBAR
+  # SIDEBAR
+    with st.sidebar:
+        st.image("logo.png", width=150)
+        st.divider()
+        menu = st.radio("Navigation", ["📊 Dashboard", "🏠 Manage Assets", "⚖️ Legal AI", "🧠 Wealth AI"], key="main_nav")
+        # Adding a unique key to the Log Out button
+        if st.sidebar.button("🚪 Log Out", key="logout_btn"):
+            st.session_state['logged_in'] = False
+            st.rerun()
+        st.caption(f"Logged in: {st.session_state['username']}")
 
     # PAGE 1: DASHBOARD
     if menu == "📊 Dashboard":
@@ -230,9 +249,16 @@ else:
                         c.commit(); c.close(); st.rerun()
             else: st.warning("Onboard an asset first.")
         with t4:
+           with t4:
             st.subheader("👤 User Account") [cite: 5]
-            st.info(f"**Landlord ID:** {user_id} | **Username:** {st.session_state['username']}")
-
+            # Use .get() to avoid NameError if the session key is missing
+            current_user = st.session_state.get('username', 'Unknown Landlord') 
+            current_id = st.session_state.get('user_id', 0)
+            
+            st.info(f"**Landlord ID:** {current_id} | **Username:** {current_user}")
+            # Ensure df exists before calling len()
+            total_props = len(df) if 'df' in locals() else 0
+            st.write(f"**Total Managed Properties:** {total_props}")
     # PAGE 3: LEGAL AI [cite: 11]
     elif menu == "⚖️ Legal AI":
         st.title("⚖️ Smart Lease Architect")
