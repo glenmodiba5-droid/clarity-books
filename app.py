@@ -125,7 +125,6 @@ def auth_page():
 if not st.session_state['logged_in']:
     auth_page()
 else:
-    # Always load data first to avoid NameErrors
     try:
         conn = get_connection()
         user_id = st.session_state.get('user_id')
@@ -136,7 +135,6 @@ else:
         df = pd.DataFrame()
         exp_df = pd.DataFrame()
 
-    # Unified Sidebar
     with st.sidebar:
         st.image("logo.png", width=150)
         st.divider()
@@ -147,19 +145,31 @@ else:
             st.rerun()
         st.caption(f"Logged in: {st.session_state.get('username')}")
 
-    # Page Logic
+    # PAGE 1: DASHBOARD
     if menu == "📊 Dashboard":
         st.title("Portfolio Insights")
         if not df.empty:
             rev = df['monthly_rent'].sum()
             exp = exp_df['amount'].sum() if not exp_df.empty else 0
+            
             k1, k2, k3 = st.columns(3)
             k1.metric("Gross Revenue", f"R{rev:,.2f}")
             k2.metric("Total Expenses", f"R{exp:,.2f}")
             k3.metric("Net Profit", f"R{(rev-exp):,.2f}")
+            
+            st.divider()
+            st.subheader("Visual Breakdown")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Revenue per Property**")
+                st.area_chart(df.set_index('name')['monthly_rent'], color="#007bff")
+            with c2:
+                st.write("**Bond Liability per Property**")
+                st.bar_chart(df.set_index('name')['bond_balance'], color="#64748b")
         else:
             st.info("Welcome! Please onboard your first asset to see analytics.")
 
+    # PAGE 2: ASSETS
     elif menu == "🏠 Manage Assets":
         st.title("Asset Inventory")
         t1, t2, t3, t4 = st.tabs(["Onboard", "Portfolio", "Expenses", "👤 Profile"])
@@ -177,35 +187,24 @@ else:
             st.subheader("Current Holdings")
             st.dataframe(df, use_container_width=True)
         with t3:
-           with t3:
             st.subheader("Log Monthly Outgoings")
             if not df.empty:
                 with st.form("e_form", clear_on_submit=True):
                     p = st.selectbox("Select Property", df['name'].tolist())
-                    
-                    # FIX: Force the ID to a standard integer
                     pid = int(df[df['name'] == p]['id'].values[0])
-                    
                     cat = st.selectbox("Category", ["Rates & Taxes", "Maintenance", "Levies", "Insurance", "Other"])
-                    
-                    # FIX: Force the amount to a standard float
                     amt = float(st.number_input("Amount (R)", min_value=0.0))
-                    
                     if st.form_submit_button("Log Expense"):
                         c = get_connection(); cur = c.cursor()
-                        # The parameters now use standard Python types
-                        cur.execute(
-                            "INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", 
-                            (int(user_id), pid, cat, amt)
-                        )
+                        cur.execute("INSERT INTO expenses (owner_id, property_id, category, amount, date) VALUES (%s,%s,%s,%s,CURDATE())", (int(user_id), pid, cat, amt))
                         c.commit(); c.close(); st.rerun()
-            else: 
-                st.warning("Onboard an asset first.")
+            else: st.warning("Onboard an asset first.")
         with t4:
             st.subheader("👤 User Account")
             st.info(f"**Landlord ID:** {user_id} | **Username:** {st.session_state.get('username')}")
             st.write(f"**Total Managed Properties:** {len(df)}")
 
+    # PAGE 3 & 4 AI LOGIC REMAINS THE SAME...
     elif menu == "⚖️ Legal AI":
         st.title("⚖️ Smart Lease Architect")
         cl = st.selectbox("Select Clause Type", ["Pet Policy", "Late Payment Penalties", "Maintenance"])
