@@ -146,26 +146,59 @@ else:
         st.caption(f"Logged in: {st.session_state.get('username')}")
 
     # PAGE 1: DASHBOARD
+    # PAGE 1: DASHBOARD
     if menu == "📊 Dashboard":
         st.title("Portfolio Insights")
+        
         if not df.empty:
+            # --- AI EXECUTIVE SUMMARY ---
             rev = df['monthly_rent'].sum()
             exp = exp_df['amount'].sum() if not exp_df.empty else 0
+            profit = rev - exp
             
+            # Generate a quick insight automatically
+            with st.container(border=True):
+                insight_prompt = f"Landlord Portfolio: {len(df)} properties. Revenue: R{rev}. Expenses: R{exp}. Profit: R{profit}. Give a 2-line professional financial summary for the dashboard."
+                summary, _ = ask_ai(insight_prompt)
+                st.markdown(f"**💡 Clarity AI Insight:** {summary}")
+
+            # --- METRIC CARDS ---
             k1, k2, k3 = st.columns(3)
             k1.metric("Gross Revenue", f"R{rev:,.2f}")
             k2.metric("Total Expenses", f"R{exp:,.2f}")
-            k3.metric("Net Profit", f"R{(rev-exp):,.2f}")
+            k3.metric("Net Profit", f"R{profit:,.2f}")
             
             st.divider()
-            st.subheader("Visual Breakdown")
+
+            # --- CHART TOGGLE ---
+            st.subheader("Visual Analysis")
+            view_type = st.radio("Select View Type:", ["Area/Bar Charts", "Pie Chart Breakdown"], horizontal=True, key="chart_toggle")
+            
             c1, c2 = st.columns(2)
-            with c1:
-                st.write("**Revenue per Property**")
-                st.area_chart(df.set_index('name')['monthly_rent'], color="#007bff")
-            with c2:
-                st.write("**Bond Liability per Property**")
-                st.bar_chart(df.set_index('name')['bond_balance'], color="#64748b")
+            
+            if view_type == "Area/Bar Charts":
+                with c1:
+                    st.write("**Revenue Distribution (Area)**")
+                    st.area_chart(df.set_index('name')['monthly_rent'], color="#007bff")
+                with c2:
+                    st.write("**Bond Liability (Bar)**")
+                    st.bar_chart(df.set_index('name')['bond_balance'], color="#64748b")
+            
+            else:
+                with c1:
+                    st.write("**Revenue Contribution per Property**")
+                    # Using Plotly for a better Pie Chart experience
+                    import plotly.express as px
+                    fig_rev = px.pie(df, values='monthly_rent', names='name', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+                    st.plotly_chart(fig_rev, use_container_width=True)
+                with c2:
+                    st.write("**Expense Categories**")
+                    if not exp_df.empty:
+                        fig_exp = px.pie(exp_df, values='amount', names='category', hole=0.4)
+                        st.plotly_chart(fig_exp, use_container_width=True)
+                    else:
+                        st.info("Log expenses to see category breakdown.")
+                        
         else:
             st.info("Welcome! Please onboard your first asset to see analytics.")
 
